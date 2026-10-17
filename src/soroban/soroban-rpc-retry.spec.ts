@@ -29,6 +29,10 @@ const transient = (status = 503): Error =>
 const permanent = (): Error =>
   Object.assign(new Error('bad request'), { statusCode: 400 });
 
+/** A transport-level error whose name is in TRANSIENT_ERROR_NAMES. */
+const transportBlip = (): Error =>
+  Object.assign(new Error('socket hang up'), { name: 'ECONNRESET' });
+
 describe('Soroban RPC retry policy (#953)', () => {
   const originalEnv = process.env;
 
@@ -52,6 +56,11 @@ describe('Soroban RPC retry policy (#953)', () => {
         resolveSorobanRpcRetryPolicy({ SOROBAN_RPC_RETRY_SUBMIT: '' })
           .retrySubmit,
       ).toBe(false);
+    });
+
+    it('defaults retrySubmit to false when SOROBAN_RPC_RETRY_SUBMIT is unset', () => {
+      delete process.env.SOROBAN_RPC_RETRY_SUBMIT;
+      expect(resolveSorobanRpcRetryPolicy(process.env).retrySubmit).toBe(false);
     });
 
     it('clamps a nonsensical attempt count rather than trusting it', () => {
@@ -105,6 +114,18 @@ describe('Soroban RPC retry policy (#953)', () => {
         resolveSorobanRpcRetryPolicy({ SOROBAN_RPC_RETRY_SUBMIT: 'maybe' })
           .retrySubmit,
       ).toBe(false);
+    });
+
+    it('sets retrySubmit to true only for an explicit truthy SOROBAN_RPC_RETRY_SUBMIT', () => {
+      process.env.SOROBAN_RPC_RETRY_SUBMIT = 'true';
+      expect(resolveSorobanRpcRetryPolicy(process.env).retrySubmit).toBe(true);
+
+      for (const falsy of ['', 'false', '0', 'no', 'off']) {
+        process.env.SOROBAN_RPC_RETRY_SUBMIT = falsy;
+        expect(resolveSorobanRpcRetryPolicy(process.env).retrySubmit).toBe(
+          false,
+        );
+      }
     });
   });
 
@@ -234,6 +255,40 @@ describe('Soroban RPC retry policy (#953)', () => {
         value: 'ok',
       });
       expect(delays).toEqual([100]);
+    });
+
+    it('does NOT retry a transient submit failure when retrySubmit is false', async () => {
+      const { delays, sleep } = fakeSleep();
+      const fn = jest.fn().mockRejectedValue(transportBlip());
+
+      const result = await withSorobanRpcRetry(fn, {
+        policy: { ...POLICY, retrySubmit: false },
+        retryable: true,
+        operation: 'submit',
+        sleep,
+        random: () => 1,
+      });
+
+      expect(result.outcome).toBe('exhausted');
+      expect(fn).toHaveBeenCalledTimes(1);
+      expect(delays).toEqual([]);
+    });
+
+    it('retries a transient simulate failure up to maxAttempts', async () => {
+      const { delays, sleep } = fakeSleep();
+      const fn = jest.fn().mockRejectedValue(transportBlip());
+
+      const result = await withSorobanRpcRetry(fn, {
+        policy: POLICY,
+        retryable: true,
+        operation: 'simulate',
+        sleep,
+        random: () => 1,
+      });
+
+      expect(result.outcome).toBe('exhausted');
+      expect(fn).toHaveBeenCalledTimes(POLICY.maxAttempts);
+      expect(delays).toHaveLength(POLICY.maxAttempts - 1);
     });
 
     it('does NOT retry a permanent failure', async () => {
