@@ -17,6 +17,7 @@ import type {
   InvokeRequest,
   InvokeResult,
 } from './soroban-invoke.model';
+import { InvokeSorobanDto } from './dto/invoke-soroban.dto';
 import { resolveRequestId } from '../common/interceptors/request-id.interceptor';
 
 /**
@@ -60,7 +61,7 @@ export class SorobanInvokeController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(ApiKeyGuard)
   async invoke(
-    @Body() body: Omit<InvokeRequest, 'correlationId'>,
+    @Body() body: InvokeSorobanDto,
     @Headers('x-request-id') correlationId?: string,
   ): Promise<InvokeResult> {
     return this.soroban.invoke(
